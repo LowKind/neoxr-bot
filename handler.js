@@ -10,6 +10,7 @@ module.exports = async (client, ctx) => {
       require('./lib/system/schema')(m, env) /* input database */
       const isOwner = [client.decodeJid(client.user.id).split`@` [0], env.owner, ...global.db.setting.owners].map(v => v + '@s.whatsapp.net').includes(m.sender)
       const isPrem = (global.db.users.some(v => v.jid == m.sender) && global.db.users.find(v => v.jid == m.sender).premium)
+      const isAuth = (global.db.users.some(v => v.jid == m.sender) && global.db.users.find(v => v.jid == m.sender).authentication) || isOwner
       const groupMetadata = m.isGroup ? await client.groupMetadata(m.chat) : {}
       const participants = m.isGroup ? groupMetadata.participants : [] || []
       const adminList = m.isGroup ? await client.groupAdmin(m.chat) : [] || []
@@ -37,6 +38,11 @@ module.exports = async (client, ctx) => {
          spam: 0
       })
       if (setting.debug && !m.fromMe && isOwner) client.reply(m.chat, Func.jsonFormat(m), m)
+      if (!m.fromMe && m.isGroup && groupSet.antibot && m.isBot && isBotAdmin && (!isOwner || !isAdmin)) return m.reply(Func.texted('bold', `🚩 No other bots are allowed here.`)).then(async () => await client.groupParticipantsUpdate(m.chat, [m.sender], 'remove'))
+      if (m.isGroup && !isBotAdmin) { 
+     	   groupSet.captcha = false
+         groupSet.localonly = false
+      }
       if (m.isGroup && !groupSet.stay && (new Date * 1) >= groupSet.expired && groupSet.expired != 0) {
          return client.reply(m.chat, Func.texted('italic', '🚩 Bot time has expired and will leave from this group, thank you.', null, {
             mentions: participants.map(v => v.id)
@@ -105,7 +111,7 @@ module.exports = async (client, ctx) => {
             if (m.isBot || m.chat.endsWith('broadcast') || /edit/.test(m.mtype)) continue
             if (setting.self && !isOwner && !m.fromMe) continue
             if (!m.isGroup && !['owner'].includes(name) && chats && !isPrem && !users.banned && new Date() * 1 - chats.lastchat < env.timeout) continue
-            if (!m.isGroup && !['owner', 'menfess', 'scan', 'verify', 'payment', 'premium'].includes(name) && chats && !isPrem && !users.banned && setting.groupmode) {
+            if (!m.isGroup && !['owner', 'menfess', 'verify'].includes(name) && chats && !isPrem && !users.banned && setting.groupmode) {
                client.sendMessageModify(m.chat, `⚠️ Using bot in private chat only for premium user, want to upgrade to premium plan ? send *${prefixes[0]}premium* to see benefit and prices.`, m, {
                   largeThumb: true,
                   thumbnail: 'https://telegra.ph/file/0b32e0a0bb3b81fef9838.jpg',
@@ -114,6 +120,21 @@ module.exports = async (client, ctx) => {
                continue
             }
             if (!['me', 'owner', 'exec'].includes(name) && users && (users.banned || new Date - users.banTemp < env.timeout)) continue
+            if (!['verify', 'exec'].includes(name) && !m.isGroup && users && !users.banned && !users.verified && setting.verify) users.attempt += 1
+            let teks = `🚩 *[ ${users.attempt} / 5 ]* Verifikasi nomor dengan menggunakan email, 1 email untuk memverifikasi 1 nomor WhatsApp. Silahkan ikuti step by step berikut :\n\n– *STEP 1*\nGunakan perintah *reg <email>* untuk mendapatkan kode verifikasi melalui email.\nContoh : *reg hagozox@gmail.com*\n\n– *STEP 2*\nBuka email dan cek pesan masuk atau di folder spam, setelah kamu mendapat kode verifikasi silahkan kirim kode tersebut kepada Khoiyrul Botz.\n\n*Note* :\nMengabaikan pesan ini sebanyak *5x* kamu akan di banned dan di blokir, untuk membuka banned dan blokir dikenai biaya sebesar Rp. 2,000`
+            if (users && !users.banned && !users.verified && users.attempt >= 5 && setting.verify) return client.reply(m.isGroup ? m.sender : m.chat, Func.texted('bold', `🚩 [ ${users.attempt} / 5 ] : Kamu mengabaikan pesan verifikasi tapi tenang masih ada bot lain kok, banned thanks. (^_^)`), m).then(() => {
+               users.banned = true
+               users.attempt = 0
+               users.code = ''
+               users.codeExpire = 0
+               users.email = ''
+               client.updateBlockStatus(m.sender, 'block')
+            })
+            if (!['verify', 'exec'].includes(name) && !m.isGroup && users && !users.banned && !users.verified && setting.verify) return client.sendMessageModify(m.chat, teks, m, {
+               largeThumb: true,
+               thumbnail: await Func.fetchBuffer('https://telegra.ph/file/ef18b1c12bc3778804fb5.jpg')
+            })
+            if (!['verify', 'exec'].includes(name) && m.isGroup && users && !users.banned && !users.verified && setting.verify) return client.reply(m.chat, `🚩 Your number has not been verified, verify by sending *reg <email>* in private chat.`, m)
             if (m.isGroup && !['activation', 'groupinfo'].includes(name) && groupSet.mute) continue
             if (cmd.cache && cmd.location) {
                let file = require.resolve(cmd.location)
@@ -121,6 +142,10 @@ module.exports = async (client, ctx) => {
             }
             if (cmd.owner && !isOwner) {
                client.reply(m.chat, global.status.owner, m)
+               continue
+            }
+            if (cmd.auth && !isAuth) {
+               client.reply(m.chat, global.status.auth, m)
                continue
             }
             if (cmd.restrict && !isPrem && !isOwner && text && new RegExp('\\b' + setting.toxic.join('\\b|\\b') + '\\b').test(text.toLowerCase())) {
@@ -193,7 +218,13 @@ module.exports = async (client, ctx) => {
             if (event.botAdmin && !isBotAdmin) continue
             if (event.admin && !isAdmin) continue
             if (event.private && m.isGroup) continue
+            if (event.download && users && !users.verified && body && Func.socmed(body) && setting.verify) return client.reply(m.chat, `🚩 Your number has not been verified, verify by sending *reg <email>* in private chat.`, m)
             if (event.download && (!setting.autodownload || (body && env.evaluate_chars.some(v => body.startsWith(v))))) continue
+            if (event.premium && !isPrem && body && Func.socmed(body)) return client.reply(m.chat, global.status.premium, m)
+            if (event.game && !setting.games) continue
+            if (event.game && Func.level(users.point)[0] >= 50) continue
+            if (event.game && m.isGroup && !groupSet.game) continue
+
             event.async(m, { client, body, prefixes, groupMetadata, participants, users, chats, groupSet, setting, isOwner, isAdmin, isBotAdmin, plugins, blockList, env, ctx, store, Func, Scraper })
          }
       }

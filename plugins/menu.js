@@ -111,6 +111,7 @@ exports.run = {
                   }
                }).join('\n')
             }
+            //client.reply(id, `Gajalan Sayang`, m)
             client.sendMessageModify(m.chat, Func.Styles(print) + '\n\n' + global.footer, m, {
                ads: false,
                largeThumb: true,
